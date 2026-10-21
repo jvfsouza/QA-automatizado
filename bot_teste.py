@@ -1,8 +1,11 @@
+import argparse
+import multiprocessing
 import os
 import re
 import shutil
 import time
 from pathlib import Path
+from queue import Empty
 
 from dotenv import load_dotenv
 from openpyxl import Workbook, load_workbook
@@ -23,6 +26,7 @@ SAIDA = str(PASTA_SAIDA / "resultado.xlsx")
 PASTA_PRINTS = PASTA_SAIDA / "prints"
 TIMEOUT_MS = 60_000   # limite total por pergunta (do envio até a resposta terminar) e por navegação
 ESTAVEL_S = 3         # a resposta só é dada como pronta se não mudar durante este tempo
+PARALELO = 1          # conversas (linhas) ao mesmo tempo; também via `python bot_teste.py --paralelo N`
 
 # determina se a aba do chrome fica aberta ou fechada (true - nao abre, false-abre)
 HEADLESS = False
@@ -182,40 +186,97 @@ def celula_segura(v):
     return v
 
 
-def main():
-    PASTA_SAIDA.mkdir(exist_ok=True)
+CABECALHO = ["Linha", "Nº pergunta", "Pergunta", "Resposta do bot", "Print", "Status", "Tempo de resposta (s)"]
+
+
+def executar_linha(n_linha, perguntas, registrar):
+    """Roda uma conversa em um navegador próprio; nunca levanta exceção."""
+    feitas = set()
+
+    def registrar_linha(*valores):
+        feitas.add(valores[1])
+        registrar(*valores)
+
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=HEADLESS, slow_mo=SLOW_MO_MS)
+            try:
+                # sessão nova por linha
+                context = browser.new_context(
+                    record_video_dir=str(PASTA_SAIDA / "videos" / f"linha_{n_linha}") if GRAVAR_VIDEO else None
+                )
+                context.set_default_timeout(TIMEOUT_MS)
+                if GRAVAR_TRACE:
+                    context.tracing.start(screenshots=True, snapshots=True)
+                try:
+                    conversar(context.new_page(), n_linha, perguntas, registrar_linha)
+                finally:
+                    if GRAVAR_TRACE:
+                        context.tracing.stop(path=str(PASTA_SAIDA / "traces" / f"linha_{n_linha}.zip"))
+                    context.close()
+            finally:
+                browser.close()
+    except Exception as e:  # ex.: navegador não abriu
+        motivo = str(e).splitlines()[0] if str(e) else type(e).__name__
+        for num, pergunta in perguntas:
+            if num not in feitas:
+                registrar(n_linha, num, pergunta, f"NÃO EXECUTADA (erro inesperado: {motivo})", "", "ERRO", "")
+
+
+def trabalhador(fila, n_linha, perguntas):
+    """Roda em um processo filho: manda cada resultado para o processo principal, que é o único a gravar o Excel."""
+    executar_linha(n_linha, perguntas, lambda *valores: fila.put(valores))
+
+
+def salvar(resultados):
     wb = Workbook()
     ws = wb.active
-    ws.append(["Linha", "Nº pergunta", "Pergunta", "Resposta do bot", "Print", "Status", "Tempo de resposta (s)"])
-
-    def registrar(*valores):
-        ws.append([celula_segura(v) for v in valores])
-        for c in ws[ws.max_row]:
+    ws.append(CABECALHO)
+    for r in sorted(resultados, key=lambda r: (r[0], r[1])):
+        ws.append(r)
+    for linha in ws.iter_rows(min_row=2):
+        for c in linha:
             if isinstance(c.value, str):
                 c.data_type = "s"  # texto literal, nunca fórmula
-        try:
-            wb.save(SAIDA)  # salva a cada pergunta: nada se perde se o script cair
-        except OSError as e:
-            print(f"  aviso: não consegui salvar {SAIDA} ({e}); feche o arquivo se estiver aberto")
+    try:
+        wb.save(SAIDA)  # salva a cada pergunta: nada se perde se o script cair
+    except OSError as e:
+        print(f"  aviso: não consegui salvar {SAIDA} ({e}); feche o arquivo se estiver aberto")
+
+
+def main(paralelo=1):
+    PASTA_SAIDA.mkdir(exist_ok=True)
+    linhas = list(ler_conversas(ENTRADA))
+    resultados = []
+
+    def registrar(*valores):
+        resultados.append([celula_segura(v) for v in valores])
+        salvar(resultados)
         print(f"linha {valores[0]} pergunta {valores[1]}: {valores[5]}")
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=HEADLESS, slow_mo=SLOW_MO_MS)
-        for n_linha, perguntas in ler_conversas(ENTRADA):
-            # sessão nova por linha
-            context = browser.new_context(record_video_dir=str(PASTA_SAIDA / "videos" / f"linha_{n_linha}") if GRAVAR_VIDEO else None)
-            context.set_default_timeout(TIMEOUT_MS)
-            if GRAVAR_TRACE:
-                context.tracing.start(screenshots=True, snapshots=True)
-            try:
-                conversar(context.new_page(), n_linha, perguntas, registrar)
-            finally:
-                if GRAVAR_TRACE:
-                    context.tracing.stop(path=str(PASTA_SAIDA / "traces" / f"linha_{n_linha}.zip"))
-                context.close()
-        browser.close()
-    print(f"Concluído: {ws.max_row - 1} registros em {SAIDA}")
+    if paralelo <= 1 or len(linhas) <= 1:
+        for n_linha, perguntas in linhas:
+            executar_linha(n_linha, perguntas, registrar)
+    else:
+        ctx = multiprocessing.get_context("spawn")
+        with ctx.Manager() as manager, ctx.Pool(min(paralelo, len(linhas))) as pool:
+            fila = manager.Queue()
+            tarefas = [pool.apply_async(trabalhador, (fila, n, perg)) for n, perg in linhas]
+            while True:
+                try:
+                    registrar(*fila.get(timeout=0.5))
+                except Empty:
+                    if all(t.ready() for t in tarefas):
+                        break
+            while not fila.empty():
+                registrar(*fila.get())
+            for t in tarefas:
+                t.get()  # propaga erro de processo filho, se houver
+    print(f"Concluído: {len(resultados)} registros em {SAIDA}")
 
 
 if __name__ == "__main__":
-    main()
+    parser = argparse.ArgumentParser(description="Bot de testes do chat de atendimento")
+    parser.add_argument("--paralelo", type=int, default=PARALELO, metavar="N",
+                        help="quantas conversas (linhas da planilha) rodar ao mesmo tempo (padrão: %(default)s)")
+    main(parser.parse_args().paralelo)

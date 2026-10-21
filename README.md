@@ -106,7 +106,7 @@ No Windows: `Copy-Item -Recurse venv-example venv` e `Rename-Item venv\.env.exam
 Depois edite:
 
 - `venv/.env`: `NOME` e `MENSAGENS_INICIAIS` (veja a seção abaixo).
-- `venv/perguntas.xlsx`: suas conversas, uma por linha, nas colunas `Pergunta 1`, `Pergunta 2`, ...
+- `venv/perguntas.xlsx`: suas conversas (formato detalhado em `FORMATO_PLANILHA.md`; para gerar com uma IA, use `PROMPT_GERAR_PLANILHA.md`), uma por linha, nas colunas `Pergunta 1`, `Pergunta 2`, ...
 
 ### 5. Configurar o site
 
@@ -144,6 +144,9 @@ Em **dias seguintes** não precisa reinstalar nada: entre na pasta, ative o ambi
 # rodar o bot
 .venv/bin/python bot_teste.py
 
+# rodar 3 conversas (linhas da planilha) ao mesmo tempo
+.venv/bin/python bot_teste.py --paralelo 3
+
 # descobrir seletores do chat de um site (grava os cliques e mostra o código)
 .venv/bin/playwright codegen https://site.com/
 
@@ -155,6 +158,47 @@ PWDEBUG=1 .venv/bin/python bot_teste.py
 ```
 
 Se rodar pelo VS Code, selecione o interpretador `.venv` (`Ctrl+Shift+P` → **Python: Select Interpreter**). O projeto já traz `.vscode/settings.json` apontando para ele.
+
+## Rodar várias conversas ao mesmo tempo
+
+Cada linha da planilha é uma conversa. Por padrão o bot faz uma de cada vez: termina a linha 2, depois a 3, e assim por diante. Com `--paralelo` ele abre vários navegadores e roda várias linhas ao mesmo tempo:
+
+```bash
+python bot_teste.py --paralelo 3
+```
+
+Ou defina `PARALELO = 3` no topo do `bot_teste.py`. O argumento da linha de comando tem prioridade.
+
+### Exemplo
+
+Planilha com 9 conversas (linhas 2 a 10):
+
+| Modo | O que acontece |
+|---|---|
+| `--paralelo 1` (padrão) | linha 2 → linha 3 → ... → linha 10, uma depois da outra |
+| `--paralelo 3` | linhas 2, 3 e 4 ao mesmo tempo; quando uma termina, a próxima da fila começa |
+
+As **perguntas dentro de uma mesma linha continuam em ordem**, porque uma depende da anterior: o paralelismo é entre conversas, não entre perguntas.
+
+### Como funciona
+
+Cada conversa roda em um **processo próprio**, com seu navegador e sua sessão do chat, então uma não interfere na outra. Os processos mandam os resultados para o processo principal, que é o **único a gravar** o `output/resultado.xlsx`. O arquivo é regravado a cada pergunta, sempre ordenado por linha e número da pergunta, mesmo que as respostas cheguem fora de ordem. Os prints (`output/prints/linha_<N>/`) não se misturam, porque cada linha tem sua pasta. O resultado final é o mesmo do modo sequencial, sem nada para juntar.
+
+### Quanto tempo economiza
+
+Se cada resposta leva cerca de 20 s e a planilha tem 30 perguntas no total, são uns 10 min em sequência. Com 3 conversas em paralelo o tempo tende a cair para perto de um terço disso, se o site aguentar. Medição feita no Brazino777: 4 conversas (5 perguntas) com `--paralelo 2` levaram cerca de 2 min 15 s; não foi feita comparação com o modo sequencial.
+
+### Cuidados
+
+- **Comece com 2 ou 3.** Muitas sessões simultâneas do mesmo IP podem acionar bloqueio ou limite do site, e o erro apareceria como timeout.
+- **Para medir tempo de resposta, use `--paralelo 1`.** Com o site recebendo várias conversas juntas, o tempo medido mistura a lentidão do bot com a causada pelo próprio teste.
+- **Cada navegador consome algumas centenas de MB** de memória.
+- Com `HEADLESS = False`, abrem **N janelas** ao mesmo tempo; com `HEADLESS = True`, nenhuma.
+- Se o navegador de uma conversa não abrir, as perguntas dela entram no resultado como `NÃO EXECUTADA (erro inesperado: ...)` e as outras seguem.
+
+### O que não existe (ainda)
+
+O paralelismo é só entre **linhas da mesma planilha e do mesmo site**. O bot sempre lê `venv/perguntas.xlsx`, testa o `URL_DO_SITE` do topo do script e grava em `output/`. Rodar duas planilhas ou dois sites ao mesmo tempo exigiria argumentos para escolher a planilha e a pasta de saída (por exemplo `--entrada` e `--saida`); duas execuções simultâneas hoje gravariam na mesma pasta `output/` e se sobrescreveriam. O bot também não troca de IP: todas as conversas saem pelo IP da sua máquina.
 
 ## Configuração
 
@@ -168,6 +212,7 @@ Tudo fica no bloco de configuração no topo do `bot_teste.py`.
 | `ENTRADA` / `SAIDA` | planilha de perguntas (em `venv/`) / planilha de resultado (em `output/`) |
 | `PASTA_SAIDA` / `PASTA_PRINTS` | pasta das saídas (`output/`) / onde salvar os prints (`output/prints/`) |
 | `TIMEOUT_MS` | limite total por pergunta (do envio até a resposta terminar) e por navegação |
+| `PARALELO` | quantas conversas rodar ao mesmo tempo (padrão `1`); o argumento `--paralelo N` na linha de comando tem prioridade |
 | `ESTAVEL_S` | a resposta só é dada como pronta se o texto não mudar por este tempo |
 | `HEADLESS` | `True` roda sem abrir janela; `False` mostra o navegador |
 | `SLOW_MO_MS` | pausa entre ações (ex.: `500`), útil com `HEADLESS = False` |
