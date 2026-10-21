@@ -218,3 +218,9 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Saídas do bot (planilha, prints, vídeos, traces); modelo em output-example/
+output/
+
+# é de onde o vscode ve que tem que pegar as variavel
+.vscode

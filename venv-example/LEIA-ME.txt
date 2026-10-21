@@ -1,0 +1,1 @@
+Coloque aqui o Playwright Inspector salvo (.html), se quiser guardá-lo. Esta pasta vai para o git; a pasta venv/ não.

@@ -1,0 +1,5 @@
+Exemplo da pasta output/, que o bot cria sozinho e que fica fora do git.
+
+- resultado.xlsx: planilha de resultado (dados ilustrativos)
+- prints/linha_<N>/pergunta_<M>.png: print do chat após cada pergunta
+- videos/ e traces/: só aparecem com GRAVAR_VIDEO / GRAVAR_TRACE ligados
