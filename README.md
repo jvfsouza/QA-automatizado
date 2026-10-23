@@ -17,7 +17,7 @@ Tudo que o bot gera fica na pasta **`output/`**, que o bot cria sozinho, está n
 
 | Arquivo em `output/` | Conteúdo |
 |---|---|
-| `resultado.xlsx` | linha, nº da pergunta, pergunta, resposta do bot, caminho do print, status (`OK`/`ERRO`) e tempo de resposta em segundos |
+| `resultado.xlsx` | linha, nº da pergunta, pergunta, resposta do bot, caminho do print, status (`OK`/`ERRO`/`TRANSBORDO`) e tempo de resposta em segundos |
 | `prints/linha_<N>/pergunta_<M>.png` | print do chat após cada pergunta (`N` = linha da planilha, contando o cabeçalho como 1) |
 | `videos/`, `traces/` | só se `GRAVAR_VIDEO`/`GRAVAR_TRACE` estiverem ligados |
 
@@ -49,6 +49,7 @@ Se a pasta `venv/` não existir, o bot para com uma mensagem explicando isso.
 |---|---|
 | `NOME` | nome que o bot de atendimento pede no início da conversa |
 | `MENSAGENS_INICIAIS` | mensagens enviadas no início de toda conversa, separadas por `\|`; `{nome}` vira o valor de `NOME`. Deixe vazio se o bot não pedir nada |
+| `LOGIN_EMAIL`, `LOGIN_SENHA` | credenciais usadas se o site redirecionar para a tela de login (`/auth/`), como a Central de Ajuda da Magalu. Deixe vazio se o site for público |
 
 Exemplo: `MENSAGENS_INICIAIS={nome}|Sim` envia o nome e depois "Sim".
 
@@ -193,7 +194,7 @@ Se cada resposta leva cerca de 20 s e a planilha tem 30 perguntas no total, são
 - **Comece com 2 ou 3.** Muitas sessões simultâneas do mesmo IP podem acionar bloqueio ou limite do site, e o erro apareceria como timeout.
 - **Para medir tempo de resposta, use `--paralelo 1`.** Com o site recebendo várias conversas juntas, o tempo medido mistura a lentidão do bot com a causada pelo próprio teste.
 - **Cada navegador consome algumas centenas de MB** de memória.
-- Com `HEADLESS = False`, abrem **N janelas** ao mesmo tempo; com `HEADLESS = True`, nenhuma.
+- Com `HEADLESS = False`, abrem **N janelas** ao mesmo tempo, lado a lado numa grade (ex.: 4 = quatro quadrantes), usando `TELA_LARGURA` e `TELA_ALTURA`; com `HEADLESS = True`, nenhuma.
 - Se o navegador de uma conversa não abrir, as perguntas dela entram no resultado como `NÃO EXECUTADA (erro inesperado: ...)` e as outras seguem.
 
 ### O que não existe (ainda)
@@ -215,6 +216,7 @@ Tudo fica no bloco de configuração no topo do `bot_teste.py`.
 | `PARALELO` | quantas conversas rodar ao mesmo tempo (padrão `1`); o argumento `--paralelo N` na linha de comando tem prioridade |
 | `ESTAVEL_S` | a resposta só é dada como pronta se o texto não mudar por este tempo |
 | `HEADLESS` | `True` roda sem abrir janela; `False` mostra o navegador |
+| `TELA_LARGURA` / `TELA_ALTURA` | resolução da tela (padrão 1920x1080); com `HEADLESS = False` e `--paralelo N`, as janelas dividem essa área em grade. Alguns gerenciadores de janela (ex.: Wayland) ignoram a posição |
 | `SLOW_MO_MS` | pausa entre ações (ex.: `500`), útil com `HEADLESS = False` |
 | `GRAVAR_VIDEO` / `GRAVAR_TRACE` | gravam vídeo e trace de cada conversa, para investigar falhas |
 
@@ -237,6 +239,7 @@ São seletores CSS/Playwright. Descubra-os com `playwright codegen` e o botão *
 | Variável | O que é |
 |---|---|
 | `MENSAGENS_INICIAIS` | mensagens enviadas no início de toda conversa, sem registrar (ex.: nome e "Sim"). Vêm do `venv/.env` (`NOME` e `MENSAGENS_INICIAIS`); vazio se o bot não pedir nada |
+| `TEXTOS_TRANSBORDO` | trechos (minúsculos) que indicam transferência para atendente humano; se a resposta contiver algum, o bot imprime um aviso no terminal, registra `TRANSBORDO` e pula as demais perguntas da linha |
 | `TEXTOS_INTERMEDIARIOS` | textos curtos como "um momento" que o bot manda antes da resposta real; enquanto a última bolha for assim, o bot continua esperando |
 
 ## Usar em outro site
@@ -251,7 +254,7 @@ O script assume que o chat está **dentro de um iframe**. Chat sem iframe ou que
 ## Limitações conhecidas
 
 - Banner de cookies ou captcha que bloqueie o clique no chat não são tratados.
-- Pedido de transferência para humano pode estourar o `TIMEOUT_MS` e ser registrado como `ERRO`.
+- Transbordo para humano só é detectado se a resposta do bot contiver algum trecho de `TEXTOS_TRANSBORDO`; se o bot ficar mudo, estoura o `TIMEOUT_MS` e vira `ERRO`.
 - A resposta gravada inclui as bolhas intermediárias ("Um momento, estou verificando.") junto da resposta final.
 - Não deixe `output/resultado.xlsx` aberto no Excel/LibreOffice durante a execução: o salvamento falha (o bot só avisa no terminal e continua).
 - `perguntas.xlsx` aberto no LibreOffice podem converter `=...` em fórmula ao salvar.

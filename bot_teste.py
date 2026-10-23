@@ -1,4 +1,5 @@
 import argparse
+import math
 import multiprocessing
 import os
 import re
@@ -19,7 +20,7 @@ if not PASTA_DADOS.is_dir():
 load_dotenv(PASTA_DADOS / ".env")
 
 # ---------- Configuração ----------
-URL_DO_SITE = "https://brazino777.com/"
+URL_DO_SITE = "https://magalusellers.zendesk.com/hc/pt-br"
 ENTRADA = str(PASTA_DADOS / "perguntas.xlsx")
 PASTA_SAIDA = Path("output")  # tudo que o bot gera (planilha, prints, vídeos, traces); fora do git. Modelo em output-example/
 SAIDA = str(PASTA_SAIDA / "resultado.xlsx")
@@ -30,18 +31,29 @@ PARALELO = 1          # conversas (linhas) ao mesmo tempo; também via `python b
 
 # determina se a aba do chrome fica aberta ou fechada (true - nao abre, false-abre)
 HEADLESS = False
+TELA_LARGURA = 1920   # resolução da tela, usada para dividir as janelas em grade (HEADLESS = False com --paralelo)
+TELA_ALTURA = 1080
 SLOW_MO_MS = 500       # pausa entre ações (ex.: 500) para acompanhar com HEADLESS = False
 GRAVAR_VIDEO = False  # salva output/videos/linha_<N>/*.webm
 GRAVAR_TRACE = False  # salva output/traces/linha_<N>.zip (abrir com: playwright show-trace)
 
 # Seletores: ajuste com `playwright codegen URL_DO_SITE`
-SEL_IFRAME = "iframe[title='janela de mensagens']"  # iframe do widget (Zendesk)
-SEL_ABRIR_CHAT = ".chat-button"             # botão que abre o chat (fora do iframe); "" se já abre sozinho
+SEL_IFRAME = "iframe[title='janela de mensagens' i]"  # iframe do widget (Zendesk)
+SEL_IFRAME_ABRIR = "iframe#launcher"        # iframe do botão que abre o chat; "" se o botão está na própria página
+SEL_ABRIR_CHAT = "button[aria-label*='Abrir' i]"  # botão que abre o chat (dentro de SEL_IFRAME_ABRIR); "" se já abre sozinho
 SEL_INPUT = "#composer-input"               # campo de texto (dentro do iframe)
 SEL_ENVIAR = "button[aria-label='Enviar mensagem']"  # botão enviar (dentro do iframe)
-SEL_MSG_BOT = "div[shape][aria-live=polite]:not(:has-text('a escrever'))"  # bolhas do bot (as do usuário têm aria-live=off)
-SEL_DIGITANDO = "div[shape][aria-live=polite]:has-text('a escrever')"      # "Mía está a escrever"; "" se não existir
-SEL_JANELA = "iframe[title='janela de mensagens']"  # elemento da página que será fotografado
+SEL_MSG_BOT = "div[shape][aria-live=polite]:not(:has-text('está digitando'))"  # bolhas do bot (as do usuário têm aria-live=off)
+SEL_DIGITANDO = "div[shape][aria-live=polite]:has-text('está digitando')"  # "Bot está digitando"; "" se não existir
+SEL_JANELA = "iframe[title='janela de mensagens' i]"  # elemento da página que será fotografado
+
+# Login (só usado se o site redirecionar para a tela de entrada); credenciais vêm do venv/.env.
+LOGIN_EMAIL = os.getenv("LOGIN_EMAIL", "")
+LOGIN_SENHA = os.getenv("LOGIN_SENHA", "")
+URL_LOGIN = "**/auth/**"                         # padrão da URL da tela de login
+SEL_LOGIN_EMAIL = "[data-testid='email-input']"
+SEL_LOGIN_SENHA = "[data-testid='password-input']"
+SEL_LOGIN_ENVIAR = "[data-testid='submit-button']"
 
 # O bot pede nome e confirmação antes de aceitar perguntas; enviadas a cada conversa, sem registrar.
 MENSAGENS_INICIAIS = [
@@ -51,6 +63,8 @@ MENSAGENS_INICIAIS = [
 ]  # vêm do venv/.env (NOME e MENSAGENS_INICIAIS)
 # Bolha final igual a um destes textos curtos = resposta ainda não chegou.
 TEXTOS_INTERMEDIARIOS = ["um momento", "estou verificando"]
+# Trechos (minúsculos) que indicam transbordo para atendente humano; ajuste conforme o que o bot do site diz.
+TEXTOS_TRANSBORDO = ["atendente humano", "atendente", "transferindo", "transferir", "fila de atendimento", "especialista"]
 # ----------------------------------
 
 POLL_S = 0.2
@@ -109,6 +123,11 @@ def intermediaria(texto):
     return len(t) < 80 and any(x in t for x in TEXTOS_INTERMEDIARIOS)
 
 
+def transbordou(texto):
+    t = texto.lower()
+    return any(x in t for x in TEXTOS_TRANSBORDO)
+
+
 def trocar_mensagem(page, chat, msgs, texto):
     """Envia `texto` e devolve (resposta do bot, segundos até a última mudança)."""
     antes = msgs.count()
@@ -136,6 +155,20 @@ def tirar_print(page, msgs, caminho):
         print(f"  aviso: print da janela falhou ({str(e).splitlines()[0]}); salvei a página inteira")
 
 
+def entrar(page):
+    """Se o site mandou para a tela de login, entra com LOGIN_EMAIL/LOGIN_SENHA e volta para o site."""
+    try:  # o desafio do Cloudflare pode atrasar o redirecionamento
+        page.wait_for_url(URL_LOGIN, timeout=15_000)
+    except Exception:
+        return  # sem tela de login: o site já está acessível
+    if not (LOGIN_EMAIL and LOGIN_SENHA):
+        raise RuntimeError("o site exige login: preencha LOGIN_EMAIL e LOGIN_SENHA em venv/.env")
+    page.fill(SEL_LOGIN_EMAIL, LOGIN_EMAIL)
+    page.fill(SEL_LOGIN_SENHA, LOGIN_SENHA)
+    page.click(SEL_LOGIN_ENVIAR)
+    page.wait_for_url(lambda url: "/auth/" not in url, timeout=TIMEOUT_MS)
+
+
 def conversar(page, n_linha, perguntas, registrar):
     pasta = PASTA_PRINTS / f"linha_{n_linha}"
     shutil.rmtree(pasta, ignore_errors=True)
@@ -146,8 +179,10 @@ def conversar(page, n_linha, perguntas, registrar):
     falha = None
     try:
         page.goto(URL_DO_SITE, wait_until="domcontentloaded")
+        entrar(page)
         if SEL_ABRIR_CHAT:
-            page.click(SEL_ABRIR_CHAT)
+            botao = page.frame_locator(SEL_IFRAME_ABRIR) if SEL_IFRAME_ABRIR else page
+            botao.locator(SEL_ABRIR_CHAT).first.click()
         expect(chat.locator(SEL_INPUT)).to_be_visible(timeout=TIMEOUT_MS)
         # deixa a saudação inicial (se houver) terminar antes de contar as mensagens
         esperar_estavel(page, lambda: (tuple(textos_bot(msgs)), digitando(chat)), TIMEOUT_MS / 1000)
@@ -164,6 +199,10 @@ def conversar(page, n_linha, perguntas, registrar):
         resposta, status, tempo = "", "OK", ""
         try:
             resposta, tempo = trocar_mensagem(page, chat, msgs, pergunta)
+            if transbordou(resposta):
+                status = "TRANSBORDO"
+                falha = f"transbordo para atendente na pergunta {num}"
+                print(f"  ⚠ AVISO: linha {n_linha}, pergunta {num}: o bot transbordou para atendente humano")
         except Exception as e:
             status, resposta = "ERRO", str(e).splitlines()[0] if str(e) else type(e).__name__
             falha = f"pergunta {num} falhou"
@@ -189,8 +228,17 @@ def celula_segura(v):
 CABECALHO = ["Linha", "Nº pergunta", "Pergunta", "Resposta do bot", "Print", "Status", "Tempo de resposta (s)"]
 
 
-def executar_linha(n_linha, perguntas, registrar):
-    """Roda uma conversa em um navegador próprio; nunca levanta exceção."""
+def posicao_janela(slot, total):
+    """(x, y, largura, altura) da janela `slot` numa grade que divide a tela em `total` partes."""
+    colunas = math.ceil(math.sqrt(total))
+    linhas = math.ceil(total / colunas)
+    largura, altura = TELA_LARGURA // colunas, TELA_ALTURA // linhas
+    return (slot % colunas) * largura, (slot // colunas) * altura, largura, altura
+
+
+def executar_linha(n_linha, perguntas, registrar, janela=None):
+    """Roda uma conversa em um navegador próprio; nunca levanta exceção.
+    `janela` = (x, y, largura, altura) posiciona o navegador na tela (só aparece com HEADLESS = False)."""
     feitas = set()
 
     def registrar_linha(*valores):
@@ -199,11 +247,14 @@ def executar_linha(n_linha, perguntas, registrar):
 
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=HEADLESS, slow_mo=SLOW_MO_MS)
+            args = [f"--window-position={janela[0]},{janela[1]}", f"--window-size={janela[2]},{janela[3]}"] if janela else []
+            browser = p.chromium.launch(headless=HEADLESS, slow_mo=SLOW_MO_MS, args=args)
             try:
-                # sessão nova por linha
+                # sessão nova por linha; com janela fixa, a página acompanha o tamanho da janela
                 context = browser.new_context(
-                    record_video_dir=str(PASTA_SAIDA / "videos" / f"linha_{n_linha}") if GRAVAR_VIDEO else None
+                    no_viewport=bool(janela),
+                    record_video_dir=str(PASTA_SAIDA / "videos" / f"linha_{n_linha}") if GRAVAR_VIDEO else None,
+                    record_video_size={"width": janela[2], "height": janela[3]} if janela and GRAVAR_VIDEO else None,
                 )
                 context.set_default_timeout(TIMEOUT_MS)
                 if GRAVAR_TRACE:
@@ -223,9 +274,15 @@ def executar_linha(n_linha, perguntas, registrar):
                 registrar(n_linha, num, pergunta, f"NÃO EXECUTADA (erro inesperado: {motivo})", "", "ERRO", "")
 
 
-def trabalhador(fila, n_linha, perguntas):
-    """Roda em um processo filho: manda cada resultado para o processo principal, que é o único a gravar o Excel."""
-    executar_linha(n_linha, perguntas, lambda *valores: fila.put(valores))
+def trabalhador(fila, vagas, n_vagas, n_linha, perguntas):
+    """Roda em um processo filho: manda cada resultado para o processo principal, que é o único a gravar o Excel.
+    Pega uma vaga da grade de janelas enquanto roda, para duas conversas simultâneas não ficarem no mesmo lugar."""
+    vaga = vagas.get()
+    try:
+        janela = None if HEADLESS else posicao_janela(vaga, n_vagas)
+        executar_linha(n_linha, perguntas, lambda *valores: fila.put(valores), janela)
+    finally:
+        vagas.put(vaga)
 
 
 def salvar(resultados):
@@ -259,9 +316,12 @@ def main(paralelo=1):
             executar_linha(n_linha, perguntas, registrar)
     else:
         ctx = multiprocessing.get_context("spawn")
-        with ctx.Manager() as manager, ctx.Pool(min(paralelo, len(linhas))) as pool:
-            fila = manager.Queue()
-            tarefas = [pool.apply_async(trabalhador, (fila, n, perg)) for n, perg in linhas]
+        n_vagas = min(paralelo, len(linhas))
+        with ctx.Manager() as manager, ctx.Pool(n_vagas) as pool:
+            fila, vagas = manager.Queue(), manager.Queue()
+            for v in range(n_vagas):
+                vagas.put(v)
+            tarefas = [pool.apply_async(trabalhador, (fila, vagas, n_vagas, n, perg)) for n, perg in linhas]
             while True:
                 try:
                     registrar(*fila.get(timeout=0.5))
@@ -273,6 +333,9 @@ def main(paralelo=1):
             for t in tarefas:
                 t.get()  # propaga erro de processo filho, se houver
     print(f"Concluído: {len(resultados)} registros em {SAIDA}")
+    transbordos = sorted({r[0] for r in resultados if r[5] == "TRANSBORDO"})
+    if transbordos:
+        print(f"⚠ AVISO: transbordo para atendente humano nas linhas: {', '.join(map(str, transbordos))}")
 
 
 if __name__ == "__main__":
