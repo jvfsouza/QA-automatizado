@@ -80,8 +80,9 @@ Fluxo em `main()` → `conversar()` → `trocar_mensagem()`:
 5. `esperar_estavel()` faz polling (200 ms) e só considera a resposta pronta quando o texto das bolhas novas **não muda por `ESTAVEL_S` segundos**, o indicador "digitando" (`SEL_DIGITANDO`) não está visível e a última bolha não é uma mensagem intermediária (`TEXTOS_INTERMEDIARIOS`, ex.: "Um momento, estou verificando.").
 6. Tira o print do `SEL_JANELA` e registra a linha no Excel.
 7. Com `--paralelo N` (ou `PARALELO`), `main()` cria um `multiprocessing.Pool` (contexto `spawn`) e cada linha roda em `trabalhador()` → `executar_linha()`, um processo com navegador próprio. Os processos filhos só enviam resultados por uma fila; **o processo principal é o único que grava o Excel** (`salvar()`, sempre ordenado por linha e nº da pergunta). Com `N = 1` as linhas rodam em sequência no mesmo processo.
-8. Se a resposta contém algum trecho de `TEXTOS_TRANSBORDO` (`transbordou()`), imprime um aviso, registra `TRANSBORDO`, marca as demais perguntas da linha como `NÃO EXECUTADA (...)` e, no fim, lista as linhas com transbordo.
-9. Se uma pergunta falha (timeout, seletor, etc.), registra `ERRO` com o motivo, marca as demais perguntas da linha como `NÃO EXECUTADA (...)` e segue para a próxima linha.
+8. Depois de cada pergunta, se o fim da resposta casa com `RESPOSTAS_AUTOMATICAS` (`resposta_automatica()`), envia a resposta automática e repete, até `MAX_AUTOMATICAS`. Cada envio é registrado como `[auto] ...` com nº `3.1`, `3.2`... (print `pergunta_3.1.png`).
+9. Se a resposta contém algum trecho de `TEXTOS_TRANSBORDO` (`transbordou()`), imprime um aviso, registra `TRANSBORDO`, marca as demais perguntas da linha como `NÃO EXECUTADA (...)` e, no fim, lista as linhas com transbordo.
+10. Se uma pergunta falha (timeout, seletor, etc.), registra `ERRO` com o motivo, marca as demais perguntas da linha como `NÃO EXECUTADA (...)` e segue para a próxima linha.
 
 Funções principais: `ler_conversas`, `esperar_estavel`, `trocar_mensagem`, `limpar` (remove o rótulo "Mía diz:"), `intermediaria`, `tirar_print`, `celula_segura` (remove caracteres ilegais, limita o tamanho, evita fórmulas).
 
@@ -91,7 +92,7 @@ Tudo no bloco de configuração no topo de `bot_teste.py`:
 
 - **Execução:** `URL_DO_SITE`, `TIMEOUT_MS` (limite total por pergunta), `ESTAVEL_S`, `HEADLESS`, `TELA_LARGURA`/`TELA_ALTURA` (grade de janelas com `--paralelo` e `HEADLESS = False`; vagas distribuídas por uma fila em `trabalhador()`), `SLOW_MO_MS`, `GRAVAR_VIDEO`, `GRAVAR_TRACE`.
 - **Seletores do chat:** `SEL_IFRAME`, `SEL_ABRIR_CHAT`, `SEL_INPUT`, `SEL_ENVIAR`, `SEL_MSG_BOT`, `SEL_DIGITANDO`, `SEL_JANELA`.
-- **Comportamento do bot de atendimento:** `MENSAGENS_INICIAIS` (vem do `.env`), `TEXTOS_INTERMEDIARIOS`, `TEXTOS_TRANSBORDO`.
+- **Comportamento do bot de atendimento:** `MENSAGENS_INICIAIS` (vem do `.env`), `TEXTOS_INTERMEDIARIOS`, `TEXTOS_TRANSBORDO`, `RESPOSTAS_AUTOMATICAS`, `MAX_AUTOMATICAS`.
 
 Para outro site: trocar `URL_DO_SITE`, refazer os `SEL_*` com `playwright codegen` e ajustar `MENSAGENS_INICIAIS` e `TEXTOS_INTERMEDIARIOS` conforme o que o bot do site faz antes de responder. O código assume que o chat está **dentro de um iframe** (`page.frame_locator`).
 
@@ -114,6 +115,7 @@ Para outro site: trocar `URL_DO_SITE`, refazer os `SEL_*` com `playwright codege
 - Células que começam com `=` viram fórmula no Excel; o script força texto literal. Abrir o `perguntas.xlsx` no LibreOffice e salvar pode reconverter.
 - Não deixe `output/resultado.xlsx` aberto no Excel/LibreOffice durante a execução: o salvamento falha (o bot só avisa no terminal e continua).
 - Em paralelo, o site pode limitar ou bloquear sessões simultâneas; os tempos de resposta medidos ficam menos confiáveis. Use `--paralelo 1` para medir tempo.
+- O bot da Magalu anuncia "vou transferir" e depois coleta dados (nº do pedido, "Sim"/"Não", data) antes do transbordo real ("TU FOSTE TRANSBORDADO" no ambiente de testes). Por isso `TEXTOS_TRANSBORDO` só tem a transferência de fato, e `RESPOSTAS_AUTOMATICAS` responde a coleta. Palavras soltas como "atendente" dão falso transbordo.
 - Não tratados: banner de cookies/captcha que bloqueie o clique, chat sem iframe, chat só com botões, transbordo em que o bot fica mudo ou usa uma frase fora de `TEXTOS_TRANSBORDO` (estoura o timeout).
 
 ## Antes de dar o trabalho por feito

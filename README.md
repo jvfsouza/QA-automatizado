@@ -239,8 +239,9 @@ São seletores CSS/Playwright. Descubra-os com `playwright codegen` e o botão *
 | Variável | O que é |
 |---|---|
 | `MENSAGENS_INICIAIS` | mensagens enviadas no início de toda conversa, sem registrar (ex.: nome e "Sim"). Vêm do `venv/.env` (`NOME` e `MENSAGENS_INICIAIS`); vazio se o bot não pedir nada |
-| `TEXTOS_TRANSBORDO` | trechos (minúsculos) que indicam transferência para atendente humano; se a resposta contiver algum, o bot imprime um aviso no terminal, registra `TRANSBORDO` e pula as demais perguntas da linha |
-| `TEXTOS_INTERMEDIARIOS` | textos curtos como "um momento" que o bot manda antes da resposta real; enquanto a última bolha for assim, o bot continua esperando |
+| `TEXTOS_TRANSBORDO` | trechos (minúsculos) que indicam que a transferência para atendente **aconteceu** (ex.: "transbordado"); não use anúncios como "vou transferir", que vêm antes da coleta de dados; se a resposta contiver algum, o bot imprime um aviso no terminal, registra `TRANSBORDO` e pula as demais perguntas da linha |
+| `TEXTOS_INTERMEDIARIOS` | textos curtos (até 160 caracteres) como "Aguarde um momento" que o bot manda antes da resposta real; enquanto a última bolha for assim, o bot continua esperando |
+| `RESPOSTAS_AUTOMATICAS` | pares (trecho, mensagem): se o fim da resposta contém o trecho (ex.: "número do pedido", `"sim" ou "não"`), o bot de QA envia a mensagem sozinho, para a conversa chegar até o transbordo. Gravadas como `[auto] ...` com nº 3.1, 3.2... Até `MAX_AUTOMATICAS` seguidas |
 
 ## Usar em outro site
 

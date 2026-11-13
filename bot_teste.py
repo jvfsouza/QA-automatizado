@@ -21,7 +21,7 @@ load_dotenv(PASTA_DADOS / ".env")
 
 # ---------- Configuração ----------
 URL_DO_SITE = "https://magalusellers.zendesk.com/hc/pt-br"
-ENTRADA = str(PASTA_DADOS / "perguntas.xlsx")
+ENTRADA = str(PASTA_DADOS / "perguntas_transbordo_seller.xlsx")
 PASTA_SAIDA = Path("output")  # tudo que o bot gera (planilha, prints, vídeos, traces); fora do git. Modelo em output-example/
 SAIDA = str(PASTA_SAIDA / "resultado.xlsx")
 PASTA_PRINTS = PASTA_SAIDA / "prints"
@@ -62,9 +62,31 @@ MENSAGENS_INICIAIS = [
     if m.strip()
 ]  # vêm do venv/.env (NOME e MENSAGENS_INICIAIS)
 # Bolha final igual a um destes textos curtos = resposta ainda não chegou.
-TEXTOS_INTERMEDIARIOS = ["um momento", "estou verificando"]
+TEXTOS_INTERMEDIARIOS = ["um momento", "estou verificando", "aguarde"]
 # Trechos (minúsculos) que indicam transbordo para atendente humano; ajuste conforme o que o bot do site diz.
-TEXTOS_TRANSBORDO = ["atendente humano", "atendente", "transferindo", "transferir", "fila de atendimento", "especialista"]
+# Só a transferência de fato: frases como "vou transferir" vêm ANTES da coleta de dados, e a conversa continua.
+# Evite palavras soltas como "atendente": o bot as usa ao perguntar o motivo, antes de transferir.
+TEXTOS_TRANSBORDO = [
+    "transbordado",          # mensagem de transferência do ambiente de testes ("TU FOSTE TRANSBORDADO")
+    "fila de atendimento",
+]
+# Respostas automáticas às perguntas de coleta do bot (ex.: "qual o número do pedido?"), para a conversa
+# chegar até o fim. (trecho minúsculo procurado no fim da resposta, mensagem enviada); vale o primeiro que casar.
+# São gravadas no resultado como "[auto] ..." com nº 3.1, 3.2... (depois da pergunta 3). Dados fictícios.
+RESPOSTAS_AUTOMATICAS = [
+    ('"sim" ou "não"', "Sim"),
+    ("aceita a transferência", "Sim"),
+    ("seguir por aqui", "Quero falar com um agente"),
+    ("seguir comigo", "Quero falar com um agente"),
+    ("número do pedido", "1234567890"),
+    ("id do agendamento", "123456"),
+    ("mês de apuração", "Outubro de 2026"),
+    ("data e o horário", "Ontem, por volta das 14h"),
+    ("relato detalhado", "O atendente recusou os pacotes dizendo que não constavam no sistema, mesmo com as etiquetas válidas."),
+    ("foto", "Não tenho a imagem agora, podem seguir sem ela?"),
+    ("print", "Não tenho a imagem agora, podem seguir sem ela?"),
+]
+MAX_AUTOMATICAS = 6  # limite de respostas automáticas seguidas, para não entrar em laço
 # ----------------------------------
 
 POLL_S = 0.2
@@ -120,12 +142,18 @@ def limpar(texto):
 
 def intermediaria(texto):
     t = limpar(texto).lower()
-    return len(t) < 80 and any(x in t for x in TEXTOS_INTERMEDIARIOS)
+    return len(t) < 160 and any(x in t for x in TEXTOS_INTERMEDIARIOS)  # ex.: "Vou verificar ... Aguarde um momento, por favor."
 
 
 def transbordou(texto):
     t = texto.lower()
     return any(x in t for x in TEXTOS_TRANSBORDO)
+
+
+def resposta_automatica(texto):
+    """Mensagem para responder a uma pergunta de coleta no fim de `texto`, ou None."""
+    fim = texto.lower()[-250:]
+    return next((msg for trecho, msg in RESPOSTAS_AUTOMATICAS if trecho in fim), None)
 
 
 def trocar_mensagem(page, chat, msgs, texto):
@@ -191,14 +219,13 @@ def conversar(page, n_linha, perguntas, registrar):
     except Exception as e:
         falha = f"falha ao abrir o chat: {str(e).splitlines()[0]}"
 
-    for num, pergunta in perguntas:
+    def passo(num, texto, rotulo=None):
+        """Envia `texto`, tira o print e registra; devolve a resposta (ou None se falhou/transbordou)."""
+        nonlocal falha
         caminho = pasta / f"pergunta_{num}.png"
-        if falha:
-            registrar(n_linha, num, pergunta, f"NÃO EXECUTADA ({falha})", "", "ERRO", "")
-            continue
         resposta, status, tempo = "", "OK", ""
         try:
-            resposta, tempo = trocar_mensagem(page, chat, msgs, pergunta)
+            resposta, tempo = trocar_mensagem(page, chat, msgs, texto)
             if transbordou(resposta):
                 status = "TRANSBORDO"
                 falha = f"transbordo para atendente na pergunta {num}"
@@ -211,7 +238,20 @@ def conversar(page, n_linha, perguntas, registrar):
             caminho_txt = str(caminho)
         except Exception as e:
             caminho_txt = f"(print falhou: {str(e).splitlines()[0]})"
-        registrar(n_linha, num, pergunta, resposta, caminho_txt, status, tempo)
+        registrar(n_linha, num, rotulo or texto, resposta, caminho_txt, status, tempo)
+        return None if falha else resposta
+
+    for num, pergunta in perguntas:
+        if falha:
+            registrar(n_linha, num, pergunta, f"NÃO EXECUTADA ({falha})", "", "ERRO", "")
+            continue
+        resposta = passo(num, pergunta)
+        # responde sozinho às perguntas de coleta (nº do pedido, "Sim ou Não"...) até o bot seguir adiante
+        for k in range(1, MAX_AUTOMATICAS + 1):
+            auto = resposta and resposta_automatica(resposta)
+            if not auto:
+                break
+            resposta = passo(round(num + k / 10, 1), auto, f"[auto] {auto}")
 
 
 def digitando(chat):
