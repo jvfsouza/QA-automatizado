@@ -51,6 +51,8 @@ Se a pasta `venv/` não existir, o bot para com uma mensagem explicando isso.
 | `MENSAGENS_INICIAIS` | mensagens enviadas no início de toda conversa, separadas por `\|`; `{nome}` vira o valor de `NOME`. Deixe vazio se o bot não pedir nada |
 | `LOGIN_EMAIL`, `LOGIN_SENHA` | credenciais usadas se o site redirecionar para a tela de login (`/auth/`), como a Central de Ajuda da Magalu. Deixe vazio se o site for público |
 
+**Sessão salva:** depois do primeiro login, o bot grava os cookies em `venv/sessao.json` e os reaproveita (e renova) a cada conversa, então não loga toda vez. Se a sessão expirar, ele loga de novo sozinho. Para forçar um novo login, apague `venv/sessao.json`. Em `--paralelo`, as primeiras conversas podem logar juntas até o arquivo existir.
+
 Exemplo: `MENSAGENS_INICIAIS={nome}|Sim` envia o nome e depois "Sim".
 
 > `venv/` (dados) **não** é o ambiente virtual do Python. O ambiente virtual é `.venv/` (com ponto), também ignorado pelo git.

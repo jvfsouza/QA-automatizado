@@ -21,10 +21,11 @@ load_dotenv(PASTA_DADOS / ".env")
 
 # ---------- Configuração ----------
 URL_DO_SITE = "https://magalusellers.zendesk.com/hc/pt-br"
-ENTRADA = str(PASTA_DADOS / "perguntas_transbordo_seller.xlsx")
+ENTRADA = str(PASTA_DADOS / "perguntas_transbordo_assuntos.xlsx")
 PASTA_SAIDA = Path("output")  # tudo que o bot gera (planilha, prints, vídeos, traces); fora do git. Modelo em output-example/
 SAIDA = str(PASTA_SAIDA / "resultado.xlsx")
 PASTA_PRINTS = PASTA_SAIDA / "prints"
+ARQUIVO_SESSAO = PASTA_DADOS / "sessao.json"  # login salvo e renovado a cada conversa; apague para forçar novo login
 TIMEOUT_MS = 60_000   # limite total por pergunta (do envio até a resposta terminar) e por navegação
 ESTAVEL_S = 3         # a resposta só é dada como pronta se não mudar durante este tempo
 PARALELO = 1          # conversas (linhas) ao mesmo tempo; também via `python bot_teste.py --paralelo N`
@@ -197,6 +198,17 @@ def entrar(page):
     page.wait_for_url(lambda url: "/auth/" not in url, timeout=TIMEOUT_MS)
 
 
+def salvar_sessao(context):
+    """Grava cookies/sessão em ARQUIVO_SESSAO (atômico, seguro em paralelo). Falha só avisa."""
+    tmp = ARQUIVO_SESSAO.with_name(f"{ARQUIVO_SESSAO.name}.{os.getpid()}.tmp")
+    try:
+        context.storage_state(path=str(tmp))
+        os.replace(tmp, ARQUIVO_SESSAO)
+    except Exception as e:
+        tmp.unlink(missing_ok=True)
+        print(f"  aviso: não consegui salvar a sessão ({str(e).splitlines()[0]})")
+
+
 def conversar(page, n_linha, perguntas, registrar):
     pasta = PASTA_PRINTS / f"linha_{n_linha}"
     shutil.rmtree(pasta, ignore_errors=True)
@@ -208,6 +220,7 @@ def conversar(page, n_linha, perguntas, registrar):
     try:
         page.goto(URL_DO_SITE, wait_until="domcontentloaded")
         entrar(page)
+        salvar_sessao(page.context)  # antes de abrir o chat: renova o login sem guardar a conversa
         if SEL_ABRIR_CHAT:
             botao = page.frame_locator(SEL_IFRAME_ABRIR) if SEL_IFRAME_ABRIR else page
             botao.locator(SEL_ABRIR_CHAT).first.click()
@@ -292,6 +305,7 @@ def executar_linha(n_linha, perguntas, registrar, janela=None):
             try:
                 # sessão nova por linha; com janela fixa, a página acompanha o tamanho da janela
                 context = browser.new_context(
+                    storage_state=str(ARQUIVO_SESSAO) if ARQUIVO_SESSAO.exists() else None,
                     no_viewport=bool(janela),
                     record_video_dir=str(PASTA_SAIDA / "videos" / f"linha_{n_linha}") if GRAVAR_VIDEO else None,
                     record_video_size={"width": janela[2], "height": janela[3]} if janela and GRAVAR_VIDEO else None,

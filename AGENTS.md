@@ -61,6 +61,7 @@ Formato completo da planilha em `FORMATO_PLANILHA.md`; prompt para gerá-la com 
 - `venv/.env`:
   - `NOME`: nome que o bot do site pede no início.
   - `LOGIN_EMAIL` / `LOGIN_SENHA`: usados por `entrar()` quando o site redireciona para `/auth/` (login a cada conversa; seletores `SEL_LOGIN_*`). Nunca commitar.
+  - `venv/sessao.json` (gerado, `ARQUIVO_SESSAO`): `storage_state` do Playwright. Cada contexto novo carrega esse arquivo; `salvar_sessao()` regrava depois de `entrar()` e antes de abrir o chat (renova o login sem guardar a conversa do Zendesk). Escrita atômica (`os.replace`), segura em paralelo. Sessão expirada = `entrar()` loga de novo. Apague o arquivo para forçar novo login. Contém cookies: nunca commitar.
   - `MENSAGENS_INICIAIS`: mensagens enviadas no começo de toda conversa, separadas por `|`; `{nome}` vira o valor de `NOME`. Exemplo: `{nome}|Sim`. Vazio = não envia nada.
 
 ## Saídas (`output/`)
